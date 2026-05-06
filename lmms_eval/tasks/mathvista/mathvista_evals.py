@@ -9,7 +9,6 @@ from Levenshtein import distance
 from latex2sympy2_extended.latex2sympy2 import NormalizationConfig
 from loguru import logger as eval_logger
 
-from lmms_eval.llm_judge import Request, ServerConfig, get_server
 from lmms_eval.tasks._task_utils.math_verify_utils import (
     ExprExtractionConfig,
     LatexExtractionConfig,
@@ -171,14 +170,21 @@ class MathVistaEvaluator:
     API_TYPE = os.getenv("API_TYPE", "openai")
     gpt_model = os.getenv("MODEL_VERSION", "gpt-4o-2024-11-20")
 
-    # Initialize llm_judge server
-    server_config = ServerConfig(model_name=gpt_model, temperature=0.0, max_tokens=256, timeout=60, num_retries=5, retry_delay=10)
-    server = get_server(server_name=API_TYPE, config=server_config)
-
     def __init__(self, quick_extract=False):
         self.quick_extract = quick_extract
+        self._server = None
+
+    def get_judge_server(self):
+        if self._server is None:
+            from lmms_eval.llm_judge import ServerConfig, get_server
+
+            server_config = ServerConfig(model_name=self.gpt_model, temperature=0.0, max_tokens=256, timeout=60, num_retries=5, retry_delay=10)
+            self._server = get_server(server_name=self.API_TYPE, config=server_config)
+        return self._server
 
     def get_chat_response(self, prompt, temperature=0, max_tokens=256, n=1, patience=5, sleep_time=0):
+        from lmms_eval.llm_judge import Request, ServerConfig
+
         # Create a custom server config for this specific request with different parameters
         request_config = ServerConfig(model_name=self.gpt_model, temperature=temperature, max_tokens=max_tokens, timeout=60, num_retries=patience, retry_delay=sleep_time)
 
@@ -188,7 +194,7 @@ class MathVistaEvaluator:
                 # Use the core evaluate method with a Request object for direct text generation
                 request = Request(messages=[{"role": "user", "content": prompt}], config=request_config)
 
-                response = self.server.evaluate(request)
+                response = self.get_judge_server().evaluate(request)
 
                 if response.success:
                     prediction = response.content.strip()

@@ -10,7 +10,6 @@ import yaml
 from latex2sympy2_extended.latex2sympy2 import NormalizationConfig
 from loguru import logger as eval_logger
 
-from lmms_eval.llm_judge import ServerConfig, get_server
 from lmms_eval.tasks._task_utils.hash_answer import append_hash_answer_instruction, extract_choice_answer, extract_hash_answer
 from lmms_eval.tasks._task_utils.math_verify_utils import (
     ExprExtractionConfig,
@@ -45,14 +44,21 @@ _MATH_EXTRACT_CONFIG = [
     ExprExtractionConfig(try_extract_without_anchor=True),
 ]
 
-# Initialize the judge server
 API_TYPE = os.getenv("API_TYPE", "openai")
 GPT_MODEL = os.getenv("MODEL_VERSION", "gpt-4o-2024-11-20")
+_judge_server = None
 
-server_config = ServerConfig(
-    model_name=GPT_MODEL,
-)
-server = get_server(server_name=API_TYPE, config=server_config)
+
+def get_judge_server():
+    global _judge_server
+    if _judge_server is None:
+        from lmms_eval.llm_judge import ServerConfig, get_server
+
+        server_config = ServerConfig(
+            model_name=GPT_MODEL,
+        )
+        _judge_server = get_server(server_name=API_TYPE, config=server_config)
+    return _judge_server
 
 
 def mathvision_doc_to_visual(doc):
@@ -86,7 +92,7 @@ def mathvision_gpt_eval_process_results(doc, results):
 
         try:
             # Use the llm_judge API for binary evaluation
-            result = server.evaluate_binary(question=question, answer=gt_answer, prediction=model_answer, output_format="0/1")
+            result = get_judge_server().evaluate_binary(question=question, answer=gt_answer, prediction=model_answer, output_format="0/1")
 
             # Parse the result
             if result["success"]:
