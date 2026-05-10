@@ -20,6 +20,16 @@ def _extract_answer_tag_content(text):
     return match.group(1).strip()
 
 
+def _extract_geomverse_answer(text):
+    hash_answer = extract_hash_answer(text)
+    tagged_answer = _extract_answer_tag_content(hash_answer)
+    if tagged_answer is not None:
+        return tagged_answer
+    if hash_answer != str(text).strip():
+        return hash_answer
+    return _extract_answer_tag_content(text)
+
+
 def _parse_math(text):
     return parse(
         str(text),
@@ -49,12 +59,10 @@ def geomverse_doc_to_text(doc, lmms_eval_specific_kwargs=None):
 
 
 def geomverse_process_results(doc, results):
-    tagged_answer = extract_hash_answer(results[0])
-    if tagged_answer == str(results[0]).strip():
-        tagged_answer = _extract_answer_tag_content(results[0])
-    if tagged_answer is None:
+    answer = _extract_geomverse_answer(results[0])
+    if answer is None:
         return {"exact_match": 0.0}
-    prediction = _parse_math(tagged_answer)
+    prediction = _parse_math(answer)
     target = _parse_math(doc["answer"])
     if len(prediction) == 0 or len(target) == 0:
         return {"exact_match": 0.0}
