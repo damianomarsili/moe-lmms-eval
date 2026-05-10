@@ -10,7 +10,6 @@ import numpy as np
 import yaml
 from loguru import logger as eval_logger
 
-from lmms_eval.llm_judge import ServerConfig, get_server
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 from lmms_eval.tasks._task_utils.hash_answer import append_hash_answer_instruction, extract_choice_answer, extract_hash_answer
 
@@ -26,12 +25,19 @@ with open(Path(__file__).parent / "_default_template_yaml", "r") as f:
 
 API_TYPE = os.getenv("API_TYPE", "openai")
 MODEL_VERSION = os.getenv("MODEL_VERSION", "gpt-4o-2024-11-20")
+_judge_server = None
 
-# Initialize the judge server
-server_config = ServerConfig(
-    model_name=MODEL_VERSION,
-)
-server = get_server(server_name=API_TYPE, config=server_config)
+
+def get_judge_server():
+    global _judge_server
+    if _judge_server is None:
+        from lmms_eval.llm_judge import ServerConfig, get_server
+
+        server_config = ServerConfig(
+            model_name=MODEL_VERSION,
+        )
+        _judge_server = get_server(server_name=API_TYPE, config=server_config)
+    return _judge_server
 
 
 def replace_images_tokens(input_string):
@@ -131,7 +137,7 @@ def mmmu_reasoning_process_results(doc, results):
 
         try:
             # Use the llm_judge API for binary evaluation
-            result = server.evaluate_binary(question=formatted_question, answer=str(answer), prediction=pred, output_format="0/1")
+            result = get_judge_server().evaluate_binary(question=formatted_question, answer=str(answer), prediction=pred, output_format="0/1")
 
             # Parse the result
             if result["success"]:
