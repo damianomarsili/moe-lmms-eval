@@ -135,6 +135,31 @@ def mathvision_process_results(doc, results):
             fallback_mode="no_fallback",
         )
 
+    def kimi_vl_choice_value_relaxed():
+        return os.environ.get("KIMI_VL_CHOICE_VALUE_RELAXED", "").lower() in {"1", "true", "yes"}
+
+    def normalize_text(text):
+        text = str(text).strip().lower()
+        text = re.sub(r"^\$+(.*?)\$+$", r"\1", text)
+        text = re.sub(r"\\(?:text|mathrm|mathbf)\{([^{}]*)\}", r"\1", text)
+        text = re.sub(r"\\[a-zA-Z]+", " ", text)
+        text = text.replace("{", "").replace("}", "").replace(",", "")
+        text = re.sub(r"\s+", "", text)
+        return text.strip(".。")
+
+    def value_matches_option(prediction, option):
+        if normalize_text(prediction) == normalize_text(option):
+            return True
+        pred_parsed = parse_math(prediction)
+        option_parsed = parse_math(option)
+        return len(pred_parsed) > 0 and len(option_parsed) > 0 and verify(option_parsed, pred_parsed, strict=True)
+
+    def choice_value_matches_target(prediction, gt_answer, options):
+        gt_answer = str(gt_answer).strip().upper()
+        if len(gt_answer) != 1 or gt_answer < "A" or gt_answer > chr(ord("A") + len(options) - 1):
+            return False
+        return value_matches_option(prediction, options[ord(gt_answer) - ord("A")])
+
     correct_list = []
     for pred in results:
         hash_answer = extract_hash_answer(pred)
@@ -152,6 +177,8 @@ def mathvision_process_results(doc, results):
             gold_parsed = parse_math(gt_answer)
 
         correct = len(pred_parsed) > 0 and len(gold_parsed) > 0 and verify(gold_parsed, pred_parsed, strict=True)
+        if not correct and len(doc["options"]) > 0 and kimi_vl_choice_value_relaxed():
+            correct = choice_value_matches_target(hash_answer, gt_answer, doc["options"])
         correct_list.append(correct)
     return {
         "mathvision_standard_eval": {

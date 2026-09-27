@@ -1,0 +1,44 @@
+dataset_path: BoKelvin/SLAKE
+dataset_kwargs:
+  token: true
+task: "slake"
+test_split: test
+process_docs: !function utils.slake_process_docs
+output_type: generate_until
+doc_to_visual: !function utils.slake_doc_to_visual
+doc_to_text: !function utils.slake_doc_to_text
+doc_to_target: "answer"
+process_results: !function utils.slake_process_results
+
+lmms_eval_specific_kwargs:
+  default:
+    pre_prompt: ""
+    post_prompt: "\nAnswer with a single word or short phrase."
+
+generation_kwargs:
+  max_new_tokens: 2048
+  temperature: 0
+  do_sample: false
+
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_relaxed_match
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_token_f1
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_format_valid
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_has_answer_tag
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_has_boxed
+    aggregation: mean
+    higher_is_better: true
+
+metadata:
+  - version: 0.0

@@ -94,29 +94,55 @@ class ChatMessages(BaseModel):
                 if content.type == "text":
                     openai_message["content"].append({"type": "text", "text": content.text})
                 elif content.type == "image":
-                    openai_message["content"].append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{self.encode_image(content.url)}"}})
+                    openai_message["content"].append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{self.encode_image(content.url, video_kwargs)}"},
+                        }
+                    )
                 elif content.type == "video":
                     if fetch_video is None:
                         raise ImportError("qwen_vl_utils is required for video processing. Please install it with: pip install qwen-vl-utils")
                     video_input = fetch_video({"type": "video", "video": content.url, **video_kwargs})
                     for frame in video_input:
                         image = Image.fromarray(frame.permute(1, 2, 0).numpy().astype(np.uint8))
-                        openai_message["content"].append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{self.encode_image(image)}"}})
+                        openai_message["content"].append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{self.encode_image(image, video_kwargs)}"},
+                            }
+                        )
                 # TODO, audio hasn't been implemented yet
                 elif content.type == "audio":
                     openai_message["content"].append({"type": "audio_url", "audio_url": {"url": content.url}})
             openai_messages.append(openai_message)
         return openai_messages
 
-    def encode_image(self, image: Union[Image.Image, str]):
+    def encode_image(self, image: Union[Image.Image, str], image_kwargs: Dict[str, Any] = None):
         if isinstance(image, str):
             img = Image.open(image).convert("RGB")
         else:
             img = image.copy()
 
+        img = self._resize_image(img, image_kwargs or {})
         output_buffer = BytesIO()
         img.save(output_buffer, format="PNG")
         byte_data = output_buffer.getvalue()
 
         base64_str = base64.b64encode(byte_data).decode("utf-8")
         return base64_str
+
+    @staticmethod
+    def _resize_image(img: Image.Image, image_kwargs: Dict[str, Any]) -> Image.Image:
+        max_pixels = image_kwargs.get("max_pixels")
+        if not max_pixels:
+            return img
+
+        width, height = img.size
+        pixels = width * height
+        if pixels <= int(max_pixels):
+            return img
+
+        scale = (int(max_pixels) / pixels) ** 0.5
+        new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        return img.resize(new_size, Image.BICUBIC)

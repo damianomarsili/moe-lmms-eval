@@ -23,6 +23,21 @@ metric_list:
   - metric: exact_match
     aggregation: mean
     higher_is_better: true
+  - metric: medical_relaxed_match
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_token_f1
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_format_valid
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_has_answer_tag
+    aggregation: mean
+    higher_is_better: true
+  - metric: medical_has_boxed
+    aggregation: mean
+    higher_is_better: true
 
 metadata:
   - version: 0.0

@@ -155,7 +155,9 @@ class VLLM(lmms):
         trust_remote_code: Optional[bool] = True,
         chat_template: Optional[str] = None,
         min_image_pixels: int = 28,  # minimum image dimension, required for Qwen 2/2.5-VL models
+        max_pixels: Optional[int] = None,
         disable_log_stats: bool = False,
+        seed: Optional[int] = 1,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -167,6 +169,7 @@ class VLLM(lmms):
         self.max_frame_num = max_frame_num
         self.chat_template = chat_template
         self.min_image_pixels = min_image_pixels
+        self.max_pixels = int(max_pixels) if max_pixels is not None else None
         self.data_parallel_size = data_parallel_size
         # Qwen 2/2.5-VL models enforce minimum image dimensions
         self._enforce_image_resize = self._is_qwen_vl_model(self.model)
@@ -213,13 +216,15 @@ class VLLM(lmms):
             assert tensor_parallel_size == 1, "Data parallelism is not supported with tensor parallelism. For current vllm version"
         if accelerator.num_processes > 1:
             kwargs["distributed_executor_backend"] = "external_launcher"
+        engine_seed = 1 if seed is None else int(seed)
+        eval_logger.info(f"Using lmms-eval vLLM wrapper {__file__} with engine seed={engine_seed}")
         self.client = LLM(
             model=self.model,
             tensor_parallel_size=tensor_parallel_size,
             gpu_memory_utilization=gpu_memory_utilization,
             trust_remote_code=trust_remote_code,
             disable_log_stats=disable_log_stats,
-            seed=1,
+            seed=engine_seed,
             **kwargs,
         )
         self.disable_log_stats = disable_log_stats
@@ -228,7 +233,7 @@ class VLLM(lmms):
         self.batch_size_per_gpu = int(batch_size)
 
     def _is_qwen_vl_model(self, model: str) -> bool:
-        qwen_vl_patterns = ["qwen2-vl", "qwen2.5-vl"]
+        qwen_vl_patterns = ["qwen2-vl", "qwen2.5-vl", "qwen3-vl"]
         return any(pattern in model.lower() for pattern in qwen_vl_patterns)
 
     def _maybe_resize_image(self, img: Image.Image) -> Image.Image:
@@ -238,12 +243,20 @@ class VLLM(lmms):
         if min(img.size) <= 0:
             raise ValueError(f"Invalid image dimensions: {img.size}")
 
-        if not self._enforce_image_resize or min(img.size) >= self.min_image_pixels:
-            return img
+        if self._enforce_image_resize and min(img.size) < self.min_image_pixels:
+            scale = self.min_image_pixels / min(img.size)  # maintain original aspect ratio
+            new_size = tuple(int(dim * scale) for dim in img.size)
+            img = img.resize(new_size, Image.BICUBIC)
 
-        scale = self.min_image_pixels / min(img.size)  # maintain original aspect ratio
-        new_size = tuple(int(dim * scale) for dim in img.size)
-        return img.resize(new_size, Image.BICUBIC)
+        if self.max_pixels is not None:
+            width, height = img.size
+            pixels = width * height
+            if pixels > self.max_pixels:
+                scale = (self.max_pixels / pixels) ** 0.5
+                new_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+                img = img.resize(new_size, Image.BICUBIC)
+
+        return img
 
     # Function to encode the image
     def encode_image(self, image: Union[Image.Image, str]):
@@ -300,8 +313,9 @@ class VLLM(lmms):
 
         batch_size = self.batch_size_per_gpu
         batched_requests = [requests[i : i + batch_size] for i in range(0, len(requests), batch_size)]
-        for batch_requests in batched_requests:
+        for batch_start, batch_requests in enumerate(batched_requests):
             batched_messages = []
+            sampling_params_list = []
             for idx in range(len(batch_requests)):
                 contexts, gen_kwargs, doc_to_visual, doc_id, task, split = batch_requests[idx].arguments
                 if "max_new_tokens" not in gen_kwargs:
@@ -311,12 +325,27 @@ class VLLM(lmms):
                 if "top_p" not in gen_kwargs:
                     gen_kwargs["top_p"] = 0.95
 
+                do_sample = str(gen_kwargs.get("do_sample", "true")).strip().lower() not in {"0", "false", "no", "off"}
+                temperature = gen_kwargs["temperature"] if do_sample else 0
                 params = {
                     "max_tokens": gen_kwargs["max_new_tokens"],
-                    "temperature": gen_kwargs["temperature"],
+                    "temperature": temperature,
                     "top_p": gen_kwargs["top_p"],
                 }
-                sampling_params = SamplingParams(**params)
+                if "top_k" in gen_kwargs:
+                    params["top_k"] = int(gen_kwargs["top_k"])
+                if "seed" in gen_kwargs:
+                    # vLLM 0.19 broadcasts one SamplingParams object to a
+                    # batch. Give each request its own deterministic stream;
+                    # otherwise all requests in a batch share one noise
+                    # vector. The evaluation seed remains the base seed.
+                    params["seed"] = int(gen_kwargs["seed"]) + batch_start * batch_size + idx
+                if "stop_token_ids" in gen_kwargs:
+                    params["stop_token_ids"] = [int(token_id) for token_id in gen_kwargs["stop_token_ids"]]
+                for key in ("repetition_penalty", "presence_penalty"):
+                    if key in gen_kwargs:
+                        params[key] = float(gen_kwargs[key])
+                sampling_params_list.append(SamplingParams(**params))
 
                 visuals = [doc_to_visual(self.task_dict[task][split][doc_id])]
                 if None in visuals:
@@ -346,17 +375,15 @@ class VLLM(lmms):
 
                 batched_messages.append(messages)
 
-            sampling_params = SamplingParams(**params)
-
             # NOTE:
             # The chat method automatically applies the model's chat template to format the prompt
             # - vllm chat method: https://docs.vllm.ai/en/stable/models/generative_models.html#llmchat
             # The logic here is similar to the vllm implementation as shown here (https://docs.vllm.ai/en/stable/models/generative_models.html#llmchat)
             # - vllm implementation: https://github.com/vllm-project/vllm/blob/d97841078b6e0dde8da36d5a2b8e8857a2c37944/vllm/entrypoints/chat_utils.py#L829
             if self.chat_template is not None:
-                response = self.client.chat(sampling_params=sampling_params, messages=batched_messages, chat_template=self.chat_template, use_tqdm=False)
+                response = self.client.chat(sampling_params=sampling_params_list, messages=batched_messages, chat_template=self.chat_template, use_tqdm=False)
             else:
-                response = self.client.chat(sampling_params=sampling_params, messages=batched_messages, use_tqdm=False)
+                response = self.client.chat(sampling_params=sampling_params_list, messages=batched_messages, use_tqdm=False)
             response_text = [o.outputs[0].text for o in response]
 
             assert len(response_text) == len(batch_requests)

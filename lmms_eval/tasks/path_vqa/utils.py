@@ -1,7 +1,5 @@
-from lmms_eval.tasks._task_utils.vqa_eval_metric import EvalAIAnswerProcessor
-from lmms_eval.tasks._task_utils.hash_answer import append_hash_answer_instruction, extract_answer_for_target
-
-_ANSWER_PROCESSOR = EvalAIAnswerProcessor()
+from lmms_eval.tasks._task_utils.hash_answer import append_hash_answer_instruction
+from lmms_eval.tasks._task_utils.medical_vqa_eval import score_medical_vqa_answer
 
 
 def path_vqa_doc_to_visual(doc):
@@ -19,6 +17,4 @@ def path_vqa_doc_to_text(doc, lmms_eval_specific_kwargs=None):
 
 
 def path_vqa_process_results(doc, results):
-    prediction = _ANSWER_PROCESSOR(extract_answer_for_target(results[0], doc["answer"]))
-    target = _ANSWER_PROCESSOR(doc["answer"])
-    return {"exact_match": float(prediction == target)}
+    return score_medical_vqa_answer(results[0], doc["answer"])

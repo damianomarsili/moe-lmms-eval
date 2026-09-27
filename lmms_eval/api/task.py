@@ -869,11 +869,15 @@ class ConfigurableTask(Task):
     def download(self, dataset_kwargs=None) -> None:
         # If the dataset is a video dataset,
         # Recursively search whether their is a zip and unzip it to the huggingface home
+        if dataset_kwargs is not None:
+            dataset_kwargs = dict(dataset_kwargs)
         download_config = DownloadConfig()
         download_config.max_retries = dataset_kwargs.get("max_retries", 10) if dataset_kwargs is not None else 10
         download_config.num_proc = dataset_kwargs.get("num_proc", 8) if dataset_kwargs is not None else 8
         download_config.local_files_only = dataset_kwargs.get("local_files_only", False) if dataset_kwargs is not None else False
+        custom_dataset = None
         if dataset_kwargs is not None:
+            custom_dataset = dataset_kwargs.pop("custom_dataset", None)
             if "From_YouTube" in dataset_kwargs:
 
                 def _download_from_youtube(path):
@@ -1044,7 +1048,13 @@ class ConfigurableTask(Task):
             if "create_link" in dataset_kwargs:
                 dataset_kwargs.pop("create_link")
 
-        if dataset_kwargs is not None and "load_from_disk" in dataset_kwargs and dataset_kwargs["load_from_disk"]:
+        if custom_dataset is not None:
+            self.dataset = custom_dataset(
+                dataset_kwargs=dataset_kwargs,
+                dataset_path=self.DATASET_PATH,
+                dataset_name=self.DATASET_NAME,
+            )
+        elif dataset_kwargs is not None and "load_from_disk" in dataset_kwargs and dataset_kwargs["load_from_disk"]:
             # using local task in offline environment, need to process the online dataset into local format via
             # `ds = load_datasets("lmms-lab/MMMU")`
             self.dataset = datasets.load_from_disk(dataset_path=self.DATASET_PATH)
