@@ -1,0 +1,2 @@
+recursive-include lmms_eval/tasks *
+global-exclude __pycache__ *.py[cod]
